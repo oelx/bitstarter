@@ -22,9 +22,10 @@ References:
 */
 
 var fs = require('fs');
+var rest = require('restler');
 var program = require('commander');
 var cheerio = require('cheerio');
-var HTMLFILE_DEFAULT = "index.html";
+//var HTMLFILE_DEFAULT = "index.html";
 var CHECKSFILE_DEFAULT = "checks.json";
 
 var assertFileExists = function(infile) {
@@ -40,12 +41,20 @@ var cheerioHtmlFile = function(htmlfile) {
     return cheerio.load(fs.readFileSync(htmlfile));
 };
 
+var cheerioUrlStream = function(stream) {
+    return cheerio.load(stream);
+}
+
 var loadChecks = function(checksfile) {
     return JSON.parse(fs.readFileSync(checksfile));
 };
 
-var checkHtmlFile = function(htmlfile, checksfile) {
-    $ = cheerioHtmlFile(htmlfile);
+var checkHtmlFile = function(resource, type, checksfile) {
+    if(type == 'url') {
+      $ = cheerioUrlStream(resource);
+    } else {
+      $ = cheerioHtmlFile(resource);
+    }
     var checks = loadChecks(checksfile).sort();
     var out = {};
     for(var ii in checks) {
@@ -64,11 +73,35 @@ var clone = function(fn) {
 if(require.main == module) {
     program
         .option('-c, --checks <check_file>', 'Path to checks.json', clone(assertFileExists), CHECKSFILE_DEFAULT)
-        .option('-f, --file <html_file>', 'Path to index.html', clone(assertFileExists), HTMLFILE_DEFAULT)
+        .option('-f, --file <html_file>', 'Path to index.html', clone(assertFileExists))
+        .option('-u, --url <url>', 'URL to HTML page')
         .parse(process.argv);
-    var checkJson = checkHtmlFile(program.file, program.checks);
-    var outJson = JSON.stringify(checkJson, null, 4);
-    console.log(outJson);
+
+    // File or URL are mutually exclusive
+    if (program.file != undefined && program.url != undefined) {
+      console.log('[!] Error: You can only specify either a local file or a URL to check for at a time!');
+    } else {
+      var checkJson;
+      if (program.file != undefined) {
+        checkJson = checkHtmlFile(program.file, 'file', program.checks);
+        console.log(JSON.stringify(checkJson, null, 4));
+      } else {
+        rest.get(program.url).on('complete', function(result) {
+            if (result instanceof Error) {
+              console.log('Error: ' + result.message);
+              this.retry(5000); // try again after 5 sec
+            } else {
+              checkJson = checkHtmlFile(result, 'url', program.checks);
+              console.log(JSON.stringify(checkJson, null, 4));
+            }
+        });
+      }
+      // The stringify and output of the JSON result was originally here.
+      // I moved it upwards, especially in the case of restler to have the
+      // variable checkJson locally accessible inside the rest subfunction
+      //var outJson = JSON.stringify(checkJson, null, 4);
+      //console.log(outJson);
+    }
 } else {
     exports.checkHtmlFile = checkHtmlFile;
 }
